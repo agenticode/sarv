@@ -109,6 +109,7 @@ impl App {
         app.rebuild_rows();
         app.default_selection();
         app.fit_view_to_data();
+        app.known_series = app.store.order.len();
         app
     }
 
@@ -148,12 +149,23 @@ impl App {
         }
     }
 
-    /// Rebuild the sidebar when live polling discovered new series
-    /// (e.g. a device or interface appeared).
+    /// Rebuild the sidebar when live polling discovered new series (a device
+    /// or interface appeared, or the very first samples arrived when running
+    /// with --interval on a host without any history).
     pub fn rebuild_rows_if_new(&mut self) {
         if self.store.order.len() != self.known_series {
+            let first_data = self.known_series == 0;
             self.known_series = self.store.order.len();
+            if first_data {
+                self.default_collapse();
+            }
             self.rebuild_rows();
+            if self.selected.is_empty() {
+                self.default_selection();
+            }
+            if first_data {
+                self.fit_view_to_data();
+            }
         }
     }
 

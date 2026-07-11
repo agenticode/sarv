@@ -93,13 +93,17 @@ fn main() -> Result<()> {
         store = load_explicit(&sadf, &cli.paths)?;
     } else {
         let days = cli.days.unwrap_or(RANGES[range_idx].0);
-        let dir = default_sa_dir(cli.dir.as_deref())?;
-        let files = day_files(&dir, anchor, days);
-        if files.is_empty() {
+        let dir = default_sa_dir(cli.dir.as_deref()).unwrap_or_default();
+        let files = if dir.as_os_str().is_empty() {
+            Vec::new()
+        } else {
+            day_files(&dir, anchor, days)
+        };
+        if files.is_empty() && cli.interval.is_none() {
             bail!(
-                "no sa daily files found in {} for the last {} day(s); \
-                 is the sysstat collector enabled? (systemctl enable --now sysstat)",
-                dir.display(),
+                "no sa daily files found for the last {} day(s); enable the \
+                 collector (systemctl enable --now sysstat) for history, or \
+                 run with --interval N to collect live data directly",
                 days
             );
         }
@@ -108,7 +112,7 @@ fn main() -> Result<()> {
         store = Store::new(t0, t1);
         load_window(&mut store, &sadf, &files, None)?;
     }
-    if store.order.is_empty() {
+    if store.order.is_empty() && cli.interval.is_none() {
         bail!("no metrics found in the input data");
     }
 
@@ -119,7 +123,7 @@ fn main() -> Result<()> {
     let live_default = !explicit && anchor == Local::now().date_naive();
     let live_on = (live_default || cli.live) && !cli.no_live;
     if live_on {
-        let dir = default_sa_dir(cli.dir.as_deref())?;
+        let dir = default_sa_dir(cli.dir.as_deref()).unwrap_or_else(|_| std::env::temp_dir());
         let mut live = Live::new(
             dir,
             cli.poll
