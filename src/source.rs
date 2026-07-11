@@ -197,6 +197,7 @@ pub fn load_window(
         }
     }
     store.hostname = stats.hostname.clone();
+    store.samples = stats.samples;
     Ok(stats)
 }
 

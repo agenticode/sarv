@@ -270,37 +270,49 @@ fn load_compare(app: &mut App, cli: &Cli, sadf: &str, date: NaiveDate) -> Result
     Ok(())
 }
 
-/// Load explicitly passed sa/JSON files: two-phase (collect, then bucket)
-/// because the time window is unknown until parsed.
+/// Load explicitly passed sa/JSON files in two passes so memory stays
+/// bounded: pass 1 scans only for the covered time window, pass 2 ingests
+/// straight into the bucketed store. Raw samples are never accumulated.
 fn load_explicit(sadf: &str, paths: &[PathBuf]) -> Result<Store> {
-    let mut triples: Vec<(i64, String, f64)> = Vec::new();
-    let mut hostname = String::new();
-    for p in paths {
-        let text = if source::is_json(p) {
-            std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?
-        } else {
-            if sadf.is_empty() {
-                bail!("sadf is required to read {}", p.display());
+    let texts: Vec<String> = paths
+        .iter()
+        .map(|p| {
+            if source::is_json(p) {
+                std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))
+            } else {
+                if sadf.is_empty() {
+                    bail!("sadf is required to read {}", p.display());
+                }
+                source::run_sadf(sadf, p, None, None)
             }
-            source::run_sadf(sadf, p, None, None)?
-        };
-        let meta = parse::parse_sadf_json(&text, |ts, id, v| {
-            triples.push((ts, id.to_string(), v));
-        })?;
+        })
+        .collect::<Result<_>>()?;
+
+    // Pass 1: find the overall window.
+    let (mut t0, mut t1) = (i64::MAX, 0i64);
+    let mut samples = 0u64;
+    for text in &texts {
+        let meta = parse::parse_sadf_json(text, |_, _, _| {})?;
+        if meta.samples > 0 {
+            t0 = t0.min(meta.min_ts);
+            t1 = t1.max(meta.max_ts);
+            samples += meta.samples;
+        }
+    }
+    if samples == 0 {
+        bail!("no samples found in the given files");
+    }
+
+    // Pass 2: ingest directly into fixed buckets.
+    let mut store = Store::new(t0, t1 + 1);
+    let mut hostname = String::new();
+    for text in &texts {
+        let meta = parse::parse_sadf_json(text, |ts, id, v| store.ingest(id, ts, v))?;
         if !meta.hostname.is_empty() {
             hostname = meta.hostname;
         }
     }
-    if triples.is_empty() {
-        bail!("no samples found in the given files");
-    }
-    let t0 = triples.iter().map(|t| t.0).min().unwrap();
-    let t1 = triples.iter().map(|t| t.0).max().unwrap() + 1;
-    let mut store = Store::new(t0, t1);
-    for (ts, id, v) in triples {
-        store.ingest(&id, ts, v);
-    }
     store.hostname = hostname;
-    store.samples = store.series.len() as u64; // approximation for info line
+    store.samples = samples;
     Ok(store)
 }
