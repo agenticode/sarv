@@ -211,9 +211,34 @@ fn run(
                         app.on_live_data();
                         app.rebuild_rows_if_new();
                     }
+                    debug_stats(app);
                 }
             }
         }
+    }
+}
+
+/// Append per-poll internals to SARV_STATS_LOG for troubleshooting.
+fn debug_stats(app: &App) {
+    let Ok(path) = std::env::var("SARV_STATS_LOG") else {
+        return;
+    };
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(
+            f,
+            "{} series={} samples={} approx_kb={} rows={} selected={}",
+            chrono::Local::now().format("%H:%M:%S"),
+            app.store.order.len(),
+            app.store.samples,
+            app.store.approx_bytes() / 1024,
+            app.rows.len(),
+            app.selected.len(),
+        );
     }
 }
 
