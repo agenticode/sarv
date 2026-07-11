@@ -13,11 +13,12 @@ use std::time::{Duration, Instant};
 /// Candidate directories where distros keep sa daily files.
 const SA_DIRS: &[&str] = &["/var/log/sa", "/var/log/sysstat"];
 
-/// Candidate sadc locations (RHEL, Debian/Ubuntu, SUSE).
+/// Candidate sadc locations (RHEL, Debian/Ubuntu old and new, SUSE).
 const SADC_PATHS: &[&str] = &[
     "/usr/lib64/sa/sadc",
     "/usr/lib/sa/sadc",
     "/usr/lib/sysstat/sadc",
+    "/usr/libexec/sysstat/sadc",
     "/usr/local/lib64/sa/sadc",
     "/usr/local/lib/sa/sadc",
 ];
