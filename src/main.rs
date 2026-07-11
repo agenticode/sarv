@@ -60,6 +60,12 @@ struct Cli {
     #[arg(long, default_value_t = 5)]
     poll: u64,
 
+    /// Display timezone: an IANA name like Asia/Seoul, Europe/Berlin,
+    /// America/New_York, or "local" (default). Also switchable at runtime
+    /// with the t key.
+    #[arg(long)]
+    tz: Option<String>,
+
     /// Path to the sadf binary
     #[arg(long)]
     sadf: Option<String>,
@@ -118,6 +124,14 @@ fn main() -> Result<()> {
 
     let mut app = App::new(store, anchor, range_idx);
     app.custom_days = cli.days;
+    if let Some(name) = &cli.tz {
+        if !name.eq_ignore_ascii_case("local") {
+            let z = name.parse::<chrono_tz::Tz>().map_err(|_| {
+                anyhow!("unknown timezone {name}; use an IANA name like Asia/Seoul, or \"local\"")
+            })?;
+            app.tz = Some(z);
+        }
+    }
 
     // ---- live setup ----
     let live_default = !explicit && anchor == Local::now().date_naive();

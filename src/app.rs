@@ -9,6 +9,21 @@ use std::collections::{HashMap, HashSet};
 pub const MAX_SELECTED: usize = 8;
 pub const RANGES: &[(u32, &str)] = &[(1, "1d"), (3, "3d"), (7, "7d"), (14, "2w"), (30, "1m")];
 
+/// Display timezone presets for the picker: IT hubs the tool's users work
+/// with, Seoul first. Any IANA zone also works through --tz.
+pub const TZ_PRESETS: &[(&str, &str)] = &[
+    ("Asia/Seoul", "Seoul, Korea (KST)"),
+    ("UTC", "UTC"),
+    ("Asia/Shanghai", "China (CST)"),
+    ("Asia/Kolkata", "India (IST)"),
+    ("Europe/London", "UK (GMT/BST)"),
+    ("Europe/Berlin", "Central Europe (CET/CEST)"),
+    ("America/New_York", "US Eastern"),
+    ("America/Chicago", "US Central"),
+    ("America/Los_Angeles", "US Pacific"),
+    ("Australia/Sydney", "Australia (AEST/AEDT)"),
+];
+
 #[derive(PartialEq, Clone, Copy)]
 pub enum Pane {
     Sidebar,
@@ -20,6 +35,7 @@ pub enum Mode {
     Normal,
     Help,
     Glossary,
+    TzPicker(usize),
     Input { purpose: InputPurpose, buf: String },
 }
 
@@ -70,6 +86,9 @@ pub struct App {
     pub chart_width: u16,
     pub status: String,
     pub load_info: String,
+
+    /// Display timezone: None = system local, Some = a named IANA zone.
+    pub tz: Option<chrono_tz::Tz>,
 }
 
 impl App {
@@ -104,6 +123,7 @@ impl App {
             chart_width: 80,
             status: String::new(),
             load_info: String::new(),
+            tz: None,
         };
         app.default_collapse();
         app.rebuild_rows();
@@ -111,6 +131,56 @@ impl App {
         app.fit_view_to_data();
         app.known_series = app.store.order.len();
         app
+    }
+
+    /// Format a timestamp in the display timezone.
+    pub fn fmt_ts(&self, ts: i64, fmt: &str) -> String {
+        use chrono::{Local, TimeZone};
+        match self.tz {
+            Some(z) => z
+                .timestamp_opt(ts, 0)
+                .single()
+                .map(|t| t.format(fmt).to_string())
+                .unwrap_or_default(),
+            None => Local
+                .timestamp_opt(ts, 0)
+                .single()
+                .map(|t| t.format(fmt).to_string())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Short badge for the header, e.g. "KST +09:00" or "Local".
+    pub fn tz_badge(&self) -> String {
+        use chrono::{TimeZone, Utc};
+        match self.tz {
+            Some(z) => {
+                let now = Utc::now().timestamp();
+                z.timestamp_opt(now, 0)
+                    .single()
+                    .map(|t| t.format("%Z %:z").to_string())
+                    .unwrap_or_else(|| z.name().to_string())
+            }
+            None => "Local".to_string(),
+        }
+    }
+
+    /// Apply a picker selection: 0 = local, 1.. = TZ_PRESETS.
+    pub fn apply_tz_pick(&mut self, idx: usize) {
+        if idx == 0 {
+            self.tz = None;
+            self.status = "timezone: system local".into();
+            return;
+        }
+        if let Some((name, label)) = TZ_PRESETS.get(idx - 1) {
+            match name.parse::<chrono_tz::Tz>() {
+                Ok(z) => {
+                    self.tz = Some(z);
+                    self.status = format!("timezone: {label} ({})", self.tz_badge());
+                }
+                Err(_) => self.status = format!("unknown timezone {name}"),
+            }
+        }
     }
 
     /// Fit the view to the span that actually has samples (with padding),
@@ -363,6 +433,27 @@ impl App {
                 self.mode = Mode::Normal;
                 return None;
             }
+            Mode::TzPicker(idx) => {
+                let n = TZ_PRESETS.len() + 1;
+                let i = *idx;
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('q') => {
+                        self.mode = Mode::Normal;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.mode = Mode::TzPicker((i + n - 1) % n);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.mode = Mode::TzPicker((i + 1) % n);
+                    }
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        self.mode = Mode::Normal;
+                        self.apply_tz_pick(i);
+                    }
+                    _ => {}
+                }
+                return None;
+            }
             Mode::Input { purpose, buf } => {
                 match key.code {
                     KeyCode::Esc => {
@@ -418,6 +509,17 @@ impl App {
             }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('d') => self.mode = Mode::Glossary,
+            KeyCode::Char('t') => {
+                let cur = match self.tz {
+                    None => 0,
+                    Some(z) => TZ_PRESETS
+                        .iter()
+                        .position(|(name, _)| *name == z.name())
+                        .map(|p| p + 1)
+                        .unwrap_or(1),
+                };
+                self.mode = Mode::TzPicker(cur);
+            }
             KeyCode::Esc => {
                 if !self.filter.is_empty() {
                     self.filter.clear();
@@ -648,6 +750,26 @@ pub fn parse_date_expr(s: &str, anchor: NaiveDate) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tz_presets_parse_and_format() {
+        // Every preset must be a valid IANA zone.
+        for (name, _) in TZ_PRESETS {
+            assert!(name.parse::<chrono_tz::Tz>().is_ok(), "bad zone {name}");
+        }
+        // Seoul is first and formats at +09:00 (no DST).
+        assert_eq!(TZ_PRESETS[0].0, "Asia/Seoul");
+        let mut app = App::new(
+            Store::new(0, 86_400),
+            NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+            0,
+        );
+        app.apply_tz_pick(1);
+        assert_eq!(app.fmt_ts(0, "%Y-%m-%d %H:%M:%S"), "1970-01-01 09:00:00");
+        assert!(app.tz_badge().contains("+09:00"));
+        app.apply_tz_pick(0);
+        assert!(app.tz.is_none());
+    }
 
     #[test]
     fn date_expr() {

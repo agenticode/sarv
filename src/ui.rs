@@ -4,7 +4,6 @@
 use crate::app::{App, InputPurpose, Mode, Pane};
 use crate::glossary;
 use crate::model::segments;
-use chrono::{Local, TimeZone};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::symbols;
@@ -53,6 +52,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Help => draw_help(f),
         Mode::Glossary => draw_glossary(f, app),
+        Mode::TzPicker(i) => draw_tz_picker(f, app, i),
         _ => {}
     }
 }
@@ -74,8 +74,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let range = format!(
         " {} | {} .. {} ",
         app.range_label(),
-        fmt_ts_full(app.store.t0),
-        fmt_ts_full(app.store.t1 - 1)
+        app.fmt_ts(app.store.t0, "%Y-%m-%d %H:%M:%S"),
+        app.fmt_ts(app.store.t1 - 1, "%Y-%m-%d %H:%M:%S")
     );
     let mut spans = vec![
         Span::styled(
@@ -90,6 +90,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::Cyan).bold(),
         ),
         Span::raw(range),
+        Span::styled(
+            format!(" {} ", app.tz_badge()),
+            Style::new().fg(Color::Black).bg(Color::Blue),
+        ),
     ];
     if let Some((d, _)) = &app.compare {
         spans.push(Span::styled(
@@ -194,7 +198,10 @@ fn draw_chart(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(format!(" cursor {} ", fmt_ts_full(app.cursor)));
+        .title(format!(
+            " cursor {} ",
+            app.fmt_ts(app.cursor, "%Y-%m-%d %H:%M:%S")
+        ));
 
     if app.selected.is_empty() {
         let p = Paragraph::new(
@@ -326,7 +333,14 @@ fn draw_chart(f: &mut Frame, app: &mut App, area: Rect) {
 
     let span = b - a;
     let x_labels: Vec<String> = (0..4)
-        .map(|i| fmt_ts_axis(a + span * i / 3, span))
+        .map(|i| {
+            let pat = if span <= 36 * 3600 {
+                "%H:%M"
+            } else {
+                "%m-%d %H:%M"
+            };
+            app.fmt_ts(a + span * i / 3, pat)
+        })
         .collect();
     let y_labels: Vec<String> = (0..4)
         .map(|i| {
@@ -413,7 +427,11 @@ fn draw_readout(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(Color::DarkGray))
-        .title(format!(" values @ {} ", fmt_ts_full(app.cursor)));
+        .title(format!(
+            " values @ {} {} ",
+            app.fmt_ts(app.cursor, "%Y-%m-%d %H:%M:%S"),
+            app.tz_badge()
+        ));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -431,7 +449,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             ])
         }
         _ => {
-            let hint = "Tab panes | Space select | arrows move | +/- zoom | r range | c compare | L live | n norm | d glossary | ? help | q quit";
+            let hint = "Tab panes | Space select | arrows move | +/- zoom | r range | c compare | L live | t tz | n norm | d glossary | ? help | q quit";
             if app.status.is_empty() {
                 Line::from(vec![
                     Span::styled(hint, Style::new().fg(Color::DarkGray)),
@@ -482,6 +500,7 @@ fn draw_help(f: &mut Frame) {
         ("C", "clear compare"),
         ("L", "pause / resume live updates"),
         ("n", "toggle per-series normalization"),
+        ("t", "display timezone (Seoul, UTC, US, EU, ...)"),
         ("d", "metric glossary for highlighted and selected metrics"),
         ("?", "this help"),
         ("q", "quit"),
@@ -607,23 +626,47 @@ pub fn fmt_val(v: f64) -> String {
     }
 }
 
-fn fmt_ts_axis(ts: i64, span: i64) -> String {
-    match Local.timestamp_opt(ts, 0).single() {
-        Some(t) => {
-            if span <= 36 * 3600 {
-                t.format("%H:%M").to_string()
-            } else {
-                t.format("%m-%d %H:%M").to_string()
-            }
-        }
-        None => String::new(),
+/// Timezone picker overlay: system local plus preset zones, Seoul first.
+fn draw_tz_picker(f: &mut Frame, app: &App, idx: usize) {
+    use crate::app::TZ_PRESETS;
+    let r = overlay(f, 56, (TZ_PRESETS.len() + 7) as u16);
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            "display timezone",
+            Style::new().bold().fg(Color::Cyan),
+        )),
+        Line::raw(""),
+    ];
+    let current = app.tz.map(|z| z.name().to_string());
+    let mut push_row = |i: usize, name: &str, label: &str| {
+        let selected = i == idx;
+        let is_current = match (&current, i) {
+            (None, 0) => true,
+            (Some(c), _) if i > 0 => TZ_PRESETS.get(i - 1).map(|(n, _)| *n == c).unwrap_or(false),
+            _ => false,
+        };
+        let marker = if selected { "> " } else { "  " };
+        let cur = if is_current { "  (current)" } else { "" };
+        let style = if selected {
+            Style::new().fg(Color::Black).bg(Color::Cyan).bold()
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker}{label:<28}"), style),
+            Span::styled(name.to_string(), Style::new().fg(Color::DarkGray)),
+            Span::styled(cur, Style::new().fg(Color::Green)),
+        ]));
+    };
+    push_row(0, "", "Local (system)");
+    for (i, (name, label)) in TZ_PRESETS.iter().enumerate() {
+        push_row(i + 1, name, label);
     }
-}
-
-fn fmt_ts_full(ts: i64) -> String {
-    Local
-        .timestamp_opt(ts, 0)
-        .single()
-        .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_default()
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "j/k move, Enter apply, Esc close; any IANA zone via --tz",
+        Style::new().fg(Color::DarkGray),
+    )));
+    let p = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" timezone "));
+    f.render_widget(p, r);
 }
