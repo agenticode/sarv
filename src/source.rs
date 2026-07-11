@@ -111,6 +111,9 @@ pub struct LoadStats {
 }
 
 /// Run sadf for one file, optionally restricted to [since_ts, until_ts).
+///
+/// sadf compares -s/-e against the raw (UTC) record times of the data file,
+/// not against the local wall clock, so the bounds are formatted in UTC.
 pub fn run_sadf(
     sadf: &str,
     file: &Path,
@@ -120,11 +123,17 @@ pub fn run_sadf(
     let mut cmd = Command::new(sadf);
     cmd.arg("-j");
     if let Some(s) = since_ts {
-        let t = Local.timestamp_opt(s, 0).single().context("bad since ts")?;
+        let t = chrono::Utc
+            .timestamp_opt(s, 0)
+            .single()
+            .context("bad since ts")?;
         cmd.arg("-s").arg(t.format("%H:%M:%S").to_string());
     }
     if let Some(e) = until_ts {
-        let t = Local.timestamp_opt(e, 0).single().context("bad until ts")?;
+        let t = chrono::Utc
+            .timestamp_opt(e, 0)
+            .single()
+            .context("bad until ts")?;
         cmd.arg("-e").arg(t.format("%H:%M:%S").to_string());
     }
     cmd.arg(file);
@@ -218,6 +227,10 @@ pub struct Live {
     pub own_child: Option<Child>,
     pub own_file: Option<PathBuf>,
     pub last_seen_ts: i64,
+    /// Consecutive polls whose response was mostly historical data, meaning
+    /// sadf's -s filter is not narrowing the read (version quirks, UTC
+    /// day wrap inside a local-day file). Used to back off the poll rate.
+    heavy_polls: u32,
 }
 
 impl Live {
@@ -229,6 +242,7 @@ impl Live {
             own_child: None,
             own_file: None,
             last_seen_ts: 0,
+            heavy_polls: 0,
         }
     }
 
@@ -270,8 +284,9 @@ impl Live {
         let Some(file) = self.current_file(today) else {
             return Ok(false);
         };
-        let since = if self.last_seen_ts > 0 {
-            Some(self.last_seen_ts + 1)
+        let last_seen = self.last_seen_ts;
+        let since = if last_seen > 0 {
+            Some(last_seen + 1)
         } else {
             None
         };
@@ -279,13 +294,28 @@ impl Live {
             Ok(t) => t,
             Err(_) => return Ok(false), // transient (file rotating, empty since-range)
         };
-        let before = store.samples;
+        let mut new_ts = std::collections::HashSet::new();
         let meta = parse_sadf_json(&text, |ts, id, v| {
-            if ts > self.last_seen_ts {
+            if ts > last_seen {
                 store.ingest(id, ts, v);
+                new_ts.insert(ts);
             }
         })?;
-        store.samples = before + meta.samples;
+        store.samples += new_ts.len() as u64;
+
+        // If -s did not narrow the read (old records dominate the response),
+        // back off the poll rate so repeated full-file parses stay cheap.
+        let stale_heavy =
+            since.is_some() && meta.samples > 64 && meta.min_ts <= last_seen.saturating_sub(3600);
+        if stale_heavy {
+            self.heavy_polls += 1;
+            if self.heavy_polls >= 3 && self.poll_every < Duration::from_secs(15) {
+                self.poll_every = Duration::from_secs(15);
+            }
+        } else {
+            self.heavy_polls = 0;
+        }
+
         if meta.max_ts > self.last_seen_ts {
             self.last_seen_ts = meta.max_ts;
             return Ok(true);
