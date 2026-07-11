@@ -118,6 +118,7 @@ pub struct Store {
     /// Discovery order: keeps sidebar and colors stable across reloads.
     pub order: Vec<String>,
     pub hostname: String,
+    pub first_sample_ts: i64,
     pub last_sample_ts: i64,
     pub samples: u64,
     pub truncated: bool,
@@ -131,6 +132,7 @@ impl Store {
             series: HashMap::new(),
             order: Vec::new(),
             hostname: String::new(),
+            first_sample_ts: i64::MAX,
             last_sample_ts: 0,
             samples: 0,
             truncated: false,
@@ -140,6 +142,9 @@ impl Store {
     pub fn ingest(&mut self, id: &str, ts: i64, v: f64) {
         if ts > self.last_sample_ts {
             self.last_sample_ts = ts;
+        }
+        if ts < self.first_sample_ts {
+            self.first_sample_ts = ts;
         }
         if let Some(b) = self.series.get_mut(id) {
             b.ingest(ts, v);
@@ -173,6 +178,25 @@ pub struct TreeRow {
     pub expanded: bool,
     /// Number of selected series at or under this row.
     pub sel_under: usize,
+}
+
+/// Segments used for the sidebar tree: instance segments are split into a
+/// grouping level plus the instance itself, so all instances of an activity
+/// fold under one parent.
+/// "cpu-load[3].usr" -> ["cpu-load", "cpu-load[3]", "usr"]
+pub fn tree_segments(id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for seg in segments(id) {
+        if let Some(i) = seg.find('[') {
+            if seg.ends_with(']') && i > 0 {
+                out.push(seg[..i].to_string());
+                out.push(seg.clone());
+                continue;
+            }
+        }
+        out.push(seg);
+    }
+    out
 }
 
 /// Split a series id into hierarchical segments.

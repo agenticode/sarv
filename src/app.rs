@@ -1,6 +1,6 @@
 //! Application state and key handling.
 
-use crate::model::{segments, Store, TreeRow};
+use crate::model::{segments, tree_segments, Store, TreeRow};
 use crate::source::Live;
 use chrono::{Duration as CDuration, NaiveDate};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -108,7 +108,33 @@ impl App {
         app.default_collapse();
         app.rebuild_rows();
         app.default_selection();
+        app.fit_view_to_data();
         app
+    }
+
+    /// Fit the view to the span that actually has samples (with padding),
+    /// so partially collected days do not render as a mostly empty chart.
+    pub fn fit_view_to_data(&mut self) {
+        let first = if self.store.first_sample_ts == i64::MAX {
+            self.store.t0
+        } else {
+            self.store.first_sample_ts
+        };
+        let last = if self.store.last_sample_ts == 0 {
+            self.store.t1
+        } else {
+            self.store.last_sample_ts
+        };
+        let span = (last - first).max(300);
+        let pad = (span / 40).max(30);
+        self.view = (
+            (first - pad).max(self.store.t0),
+            (last + pad).min(self.store.t1),
+        );
+        if self.view.1 - self.view.0 < 300 {
+            self.view.1 = (self.view.0 + 300).min(self.store.t1);
+        }
+        self.clamp_view();
     }
 
     pub fn range_days(&self) -> u32 {
@@ -131,30 +157,23 @@ impl App {
         }
     }
 
-    /// Collapse everything below the top level by default, except groups
-    /// with very few children.
+    /// Collapse every internal node below the top level by default: top
+    /// groups stay open, instances and sub-groups start folded.
     pub fn default_collapse(&mut self) {
         self.collapsed.clear();
-        let mut children: HashMap<String, HashSet<String>> = HashMap::new();
         for id in &self.store.order {
-            let segs = segments(id);
+            let segs = tree_segments(id);
             let mut path = String::new();
             for (i, s) in segs.iter().enumerate() {
-                let parent = path.clone();
-                if i == 0 {
-                    path = s.clone();
+                path = if i == 0 {
+                    s.clone()
                 } else {
-                    path = format!("{path}.{s}");
+                    format!("{path}.{s}")
+                };
+                let is_leaf = i + 1 == segs.len();
+                if !is_leaf && i >= 1 {
+                    self.collapsed.insert(path.clone());
                 }
-                if i > 0 {
-                    children.entry(parent).or_default().insert(path.clone());
-                }
-            }
-        }
-        for (path, kids) in &children {
-            let depth = segments(path).len();
-            if depth >= 1 && kids.len() > 6 {
-                self.collapsed.insert(path.clone());
             }
         }
     }
@@ -174,7 +193,7 @@ impl App {
             if !filter.is_empty() && !id.to_lowercase().contains(&filter) {
                 continue;
             }
-            let segs = segments(id);
+            let segs = tree_segments(id);
             let mut path = String::new();
             for (i, s) in segs.iter().enumerate() {
                 let parent = path.clone();
@@ -387,6 +406,15 @@ impl App {
             }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('d') => self.mode = Mode::Glossary,
+            KeyCode::Esc => {
+                if !self.filter.is_empty() {
+                    self.filter.clear();
+                    self.rebuild_rows();
+                    self.status = "filter cleared".into();
+                } else {
+                    self.status.clear();
+                }
+            }
             KeyCode::Tab => {
                 self.pane = match self.pane {
                     Pane::Sidebar => Pane::Chart,
@@ -574,13 +602,16 @@ impl App {
         !self.drilled && self.view_span() < loaded / 8 && loaded > 3600
     }
 
-    /// Advance cursor when new live data arrived and we are following.
+    /// Advance cursor when new live data arrived and we are following;
+    /// extend the view to the right so the newest samples stay visible.
     pub fn on_live_data(&mut self) {
         if self.follow {
-            self.cursor = self
-                .store
-                .last_sample_ts
-                .clamp(self.view.0, self.view.1 - 1);
+            let last = self.store.last_sample_ts;
+            if last + 30 > self.view.1 {
+                let ext = (last + (self.view_span() / 20).max(30)).min(self.store.t1);
+                self.view.1 = ext.max(self.view.1);
+            }
+            self.cursor = last.clamp(self.view.0, self.view.1 - 1);
         }
     }
 }

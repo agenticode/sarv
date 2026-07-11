@@ -234,7 +234,6 @@ fn reload(app: &mut App, cli: &Cli, sadf: &str, clip: Option<(i64, i64)>) -> Res
     let stats = load_window(&mut store, sadf, &files, clip)?;
     app.store = store;
     app.drilled = clip.is_some();
-    app.view = (t0, t1);
     if let Some(live) = &mut app.live {
         live.last_seen_ts = app.store.last_sample_ts;
     }
@@ -243,7 +242,12 @@ fn reload(app: &mut App, cli: &Cli, sadf: &str, clip: Option<(i64, i64)>) -> Res
     } else {
         t0
     };
-    app.clamp_view();
+    if clip.is_some() {
+        app.view = (t0, t1);
+        app.clamp_view();
+    } else {
+        app.fit_view_to_data();
+    }
     app.default_collapse();
     app.rebuild_rows();
     app.load_info = format!(
@@ -257,17 +261,55 @@ fn reload(app: &mut App, cli: &Cli, sadf: &str, clip: Option<(i64, i64)>) -> Res
 }
 
 fn load_compare(app: &mut App, cli: &Cli, sadf: &str, date: NaiveDate) -> Result<()> {
-    let dir = default_sa_dir(cli.dir.as_deref())?;
-    let file = day_file(&dir, date)
-        .ok_or_else(|| anyhow!("no sa file for {date} in {}", dir.display()))?;
-    let t0 = day_start_ts(date);
-    let mut store = Store::new(t0, t0 + 86_400);
-    load_window(&mut store, sadf, &[(date, file)], None)?;
-    if store.samples == 0 && store.order.is_empty() {
-        bail!("no samples in the sa file for {date}");
+    // Prefer the real sa daily file when one exists.
+    if !sadf.is_empty() {
+        if let Ok(dir) = default_sa_dir(cli.dir.as_deref()) {
+            if let Some(file) = day_file(&dir, date) {
+                let t0 = day_start_ts(date);
+                let mut store = Store::new(t0, t0 + 86_400);
+                load_window(&mut store, sadf, &[(date, file)], None)?;
+                if !store.order.is_empty() {
+                    app.compare = Some((date, store));
+                    return Ok(());
+                }
+            }
+        }
     }
-    app.compare = Some((date, store));
-    Ok(())
+    // Fall back to resampling the already loaded window (works for JSON
+    // inputs and for dates inside a multi-day range).
+    if let Some(store) = synth_compare_from_window(app, date) {
+        app.compare = Some((date, store));
+        return Ok(());
+    }
+    bail!("no sa file for {date} and the date is not inside the loaded window")
+}
+
+/// Build a one-day reference store by resampling the loaded window's buckets.
+fn synth_compare_from_window(app: &App, date: NaiveDate) -> Option<Store> {
+    let t0 = day_start_ts(date);
+    let t1 = t0 + 86_400;
+    if t1 <= app.store.t0 || t0 >= app.store.t1 {
+        return None;
+    }
+    let mut store = Store::new(t0, t1);
+    for id in &app.store.order {
+        if let Some(b) = app.store.series.get(id) {
+            for i in 0..b.cnt.len() {
+                if b.cnt[i] == 0 {
+                    continue;
+                }
+                let ts = b.bucket_center(i) as i64;
+                if ts >= t0 && ts < t1 {
+                    store.ingest(id, ts, b.sum[i] / b.cnt[i] as f64);
+                }
+            }
+        }
+    }
+    if store.last_sample_ts == 0 {
+        return None;
+    }
+    store.hostname = app.store.hostname.clone();
+    Some(store)
 }
 
 /// Load explicitly passed sa/JSON files in two passes so memory stays

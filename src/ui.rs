@@ -130,7 +130,16 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                     if row.expanded { "- " } else { "+ " },
                     Style::new().fg(Color::DarkGray),
                 ));
-                spans.push(Span::styled(row.label.clone(), Style::new().bold()));
+                // Instance nodes ("cpu-load[3]") display just the instance.
+                let disp = if row.label.ends_with(']') {
+                    row.label
+                        .rfind('[')
+                        .map(|i| row.label[i..].to_string())
+                        .unwrap_or_else(|| row.label.clone())
+                } else {
+                    row.label.clone()
+                };
+                spans.push(Span::styled(disp, Style::new().bold()));
                 if row.sel_under > 0 {
                     spans.push(Span::styled(
                         format!(" ({})", row.sel_under),
