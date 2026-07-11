@@ -3,6 +3,7 @@
 **The sar cockpit for your terminal: live view and weeks of history, in one static binary.**
 
 [![CI](https://github.com/agenticode/sarv/actions/workflows/ci.yml/badge.svg)](https://github.com/agenticode/sarv/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/sarv.svg)](https://crates.io/crates/sarv)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org)
 
@@ -74,8 +75,8 @@ The glossary explains every selected metric in place:
 ## Install
 
 ```sh
-# from source (Rust 1.74+)
-cargo install --git https://github.com/agenticode/sarv
+# from crates.io (Rust 1.74+)
+cargo install sarv
 
 # or grab a static binary from the releases page
 # https://github.com/agenticode/sarv/releases
@@ -179,7 +180,6 @@ month-long ranges and day-to-day comparison in one place.
 
 ## Roadmap
 
-- crates.io release
 - Bundled demo dataset (`sarv --demo`)
 - Remote mode (`sarv --host web01`) running sadf over ssh
 - Saved metric-set presets
