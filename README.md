@@ -18,7 +18,7 @@ timeline: by default it tails today's data file and keeps drawing as new
 samples arrive, so one tool answers both "what is happening" and "what
 happened last Tuesday at 03:12".
 
-![sarv demo](docs/demo.gif)
+![sarv demo](https://raw.githubusercontent.com/agenticode/sarv/main/docs/demo.gif)
 
 ## Features
 
@@ -43,6 +43,11 @@ happened last Tuesday at 03:12".
 - **Built-in metric glossary.** Press `d` on any metric: what it measures, its
   unit, and how to read it, without leaving the terminal. No more guessing
   what `%vmeff` or `kbcommit` mean.
+- **Timezones for global teams.** Press `t` to re-render every timestamp in
+  another zone: Seoul (KST) first, then UTC, China, India, UK, Central
+  Europe, US Eastern/Central/Pacific and Australia are presets, and any IANA
+  zone works via `--tz`. DST is handled correctly, and the active zone badge
+  is always visible in the header.
 - **Bounded memory by design.** Fixed-size bucket downsampling at ingest: a
   month of history costs the same RAM as a day. Measured, not promised - see
   below.
@@ -55,16 +60,16 @@ happened last Tuesday at 03:12".
 Three days of history with the crosshair parked on a spike, live updates
 running:
 
-![overview](docs/overview.png)
+![overview](https://raw.githubusercontent.com/agenticode/sarv/main/docs/overview.png)
 
 Comparing today against yesterday, aligned by time of day (magenta badge),
 with a memory series overlaid on CPU metrics:
 
-![compare](docs/compare.png)
+![compare](https://raw.githubusercontent.com/agenticode/sarv/main/docs/compare.png)
 
 The glossary explains every selected metric in place:
 
-![glossary](docs/glossary.png)
+![glossary](https://raw.githubusercontent.com/agenticode/sarv/main/docs/glossary.png)
 
 ## Install
 
@@ -88,6 +93,7 @@ sarv -r 7d                  # last 7 days as one timeline
 sarv --days 30              # a month
 sarv --compare 2026-07-05   # overlay July 5 on today
 sarv -i 2                   # 2-second live resolution via a private sadc
+sarv --tz Asia/Seoul        # view a UTC server's history in KST
 sarv /var/log/sa/sa05       # a specific daily file
 sarv export.json            # a saved "sadf -j -- -A" export (works anywhere)
 ssh web01 'sadf -j -- -A' > web01.json && sarv web01.json   # remote workflow
@@ -111,6 +117,7 @@ ssh web01 'sadf -j -- -A' > web01.json && sarv web01.json   # remote workflow
 | `c` / `C` | compare with another day / clear compare |
 | `L` | pause or resume live updates |
 | `n` | toggle per-series normalization |
+| `t` | display timezone picker (Seoul, UTC, US, EU, ...) |
 | `d` | metric glossary |
 | `?` | help |
 | `q` | quit |

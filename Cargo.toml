@@ -1,6 +1,6 @@
 [package]
 name = "sarv"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["agenticode"]
 description = "Interactive terminal cockpit for sar/sysstat data: live view, weeks of history, multi-metric overlay, day-to-day compare"
